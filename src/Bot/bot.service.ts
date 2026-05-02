@@ -1,133 +1,98 @@
 /* eslint-disable @typescript-eslint/no-non-null-asserted-optional-chain */
 import { Injectable, OnModuleInit } from '@nestjs/common'
 import * as mineflayer from 'mineflayer'
+import { Vec3 } from 'vec3'
+import minecraftData from 'minecraft-data'
+import { startFarmingNew } from './farm-new'
+import { Block } from 'prismarine-block'
+import { getAdjustedDigTime } from './utils/mining-engine'
+import { startChestProcessor } from './work/chest-mining-processor'
+import { computeFace, emptyHand, placeBlockInFront, sleep } from './utils/common.util'
+import { pathfinder } from 'mineflayer-pathfinder'
+import * as mineflayerViewer from 'prismarine-viewer'
+import { expandIslandNew } from './work/expand-island'
+import { ConfigFarming, startFarming } from './work/farm'
+import { ConfigMining, startMining } from './work/mining'
+import { ConfigStoreChest, storeToChest } from './skills/store-to-chest'
 
-type FakePlayerProfile = {
-  name: string
+export enum CommandEnum {
+  FARM = 'farm',
+  SORTING_CHEST = 'sorting_chest',
+  MINE = 'mine',
+  EXPAND = 'expand',
+  FARM_CHEST = 'farm_chest',
+  STORE_TO_CHEST = 'store_to_chest'
 }
 
-type BotWrapper = {
+export type BotWrapper = {
   bot: mineflayer.Bot
-  profile: FakePlayerProfile
+  profile: Profile
 }
 
-type TimelineEvent = {
-  time: string // "HH:mm:ss"
-  type: 'conversation' | 'logout' | 'login'
-  data?: {
-    messages?: string[]
-    initiator?: string
-    responder?: string
-    actor?: string
-  }
-}
-
-type Team = {
+type ProfileOld = {
   name: string
-  members: string[]
-  timeline: TimelineEvent[]
+  password: string
+  isPremium: boolean
+  isSpawned: boolean
+  isLogingIn: boolean
+  mining: boolean
+  farming: boolean
+  listenChat: boolean
+  clickSequence: number
+  chestMineWorker?: boolean
+  dustWorker?: boolean
+  tasKFlow?: boolean
+}
+type Profile = {
+  name: string
+  password: string
+  isPremium: boolean
+  listenChat?: boolean
+  isWorking?: boolean
+}
+
+export type ChatRequest = {
+  name: string
+  chat: string
+}
+
+export type CommandRequest = {
+  name: string
+  config: ConfigFarming | ConfigMining | ConfigStoreChest
+  command: CommandEnum
+}
+
+export type MiningRequest = {
+  name: string
+  cursor: boolean
+  x: number
+  y: number
+  z: number
+}
+
+export type ChestRequest = {
+  name: string
+  all?: boolean
 }
 
 @Injectable()
 export class BotService implements OnModuleInit {
   private bots: Record<string, BotWrapper> = {}
 
-  private readonly HOST = 'localhost'
-  private readonly PORT = 25565
+  private readonly HOST = 'alwination.id'
 
-  private players: FakePlayerProfile[] = [{ name: 'Arka' }, { name: 'Zenix' }]
-
-  private teams: Team[] = [
+  private players: Profile[] = [
     {
-      name: 'MinerTeam',
-      members: ['Arka', 'Zenix'],
-      timeline: [
-        // ===== START SOON =====
-        {
-          time: '15:00:10',
-          type: 'conversation',
-          data: {
-            initiator: 'Arka',
-            responder: 'Zenix',
-            messages: [
-              'bro {target} lagi dimana?',
-              'lagi di mine',
-              'dapet apa?',
-              'iron sama coal doang',
-              'yah gas lanjut'
-            ]
-          }
-        },
-
-        // ===== FOLLOW UP =====
-        {
-          time: '15:00:40',
-          type: 'conversation',
-          data: {
-            initiator: 'Zenix',
-            responder: 'Arka',
-            messages: ['lu di layer berapa?', 'sekitar 11', 'aman gak?', 'aman sih sejauh ini']
-          }
-        },
-
-        // ===== SMALL GAP (biar natural) =====
-        {
-          time: '15:01:30',
-          type: 'conversation',
-          data: {
-            initiator: 'Arka',
-            responder: 'Zenix',
-            messages: ['eh tadi nemu lava', 'serius?', 'iya dikit lagi kena', 'hati2 woi']
-          }
-        },
-
-        // ===== PRE-OFF SIGNAL =====
-        {
-          time: '15:02:20',
-          type: 'conversation',
-          data: {
-            initiator: 'Zenix',
-            responder: 'Arka',
-            messages: ['gw bentar lagi off deh', 'lah kenapa', 'capek', 'yaudah santai']
-          }
-        },
-
-        // ===== LOGOUT =====
-        {
-          time: '15:02:50',
-          type: 'logout',
-          data: { actor: 'Zenix' }
-        },
-
-        // ===== SOLO MOMENT =====
-        {
-          time: '15:03:30',
-          type: 'conversation',
-          data: {
-            initiator: 'Arka',
-            responder: 'Arka',
-            messages: ['sendiri lagi...', 'lanjut mining aja deh']
-          }
-        },
-
-        // ===== RELOGIN =====
-        {
-          time: '15:04:30',
-          type: 'login',
-          data: { actor: 'Zenix' }
-        },
-
-        // ===== REJOIN CHAT =====
-        {
-          time: '15:04:50',
-          type: 'conversation',
-          data: {
-            initiator: 'Zenix',
-            responder: 'Arka',
-            messages: ['balik lagi gw', 'cepet amat', 'gak jadi tidur wkwk']
-          }
-        }
-      ]
+      name: 'Jeson',
+      password: 'rZKZS666vhhU',
+      isPremium: false,
+      listenChat: false
+    },
+    {
+      name: 'Jemessss',
+      password: 'rZKZS666vhhS',
+      isPremium: false,
+      listenChat: false
     }
   ]
 
@@ -135,139 +100,271 @@ export class BotService implements OnModuleInit {
     this.start()
   }
 
-  start() {
-    this.players.forEach(p => this.createBot(p))
+  async login(data: { name: string }) {
+    const player = this.players.find(p => p.name === data.name)
+    if (!player) return 'player not found'
+    await this.createBot(player)
+  }
 
-    this.runAllTeamsSequential()
+  async sendChat(data: ChatRequest) {
+    const bot = this.bots[data.name]?.bot
+    if (!bot) return `Bot with name ${data.name} not found`
+
+    bot.chat(data.chat)
+    return 'Chat sent'
+  }
+
+  async command(data: CommandRequest) {
+    const botData = this.bots[data.name]
+    if (!botData) return `Bot with name ${data.name} not found`
+
+    // if (data.command === 'stop') {
+    //   botData.bot.clearControlStates()
+    //   botData.profile.isWorking = false
+    // }
+    // if (data.command === 'listen') {
+    //   botData.profile.listenChat = !botData.profile.listenChat
+    //   return botData.profile.listenChat
+    // }
+    // if (data.command === 'inventory') {
+    //   this.checkInventory({ name: data.name })
+    // }
+    if (data.command === CommandEnum.FARM) {
+      const config = data.config as ConfigFarming
+      await startFarming(botData, config)
+    }
+    if (data.command === CommandEnum.MINE) {
+      const config = data.config as ConfigMining
+      await startMining(botData, config)
+    }
+    if (data.command === CommandEnum.SORTING_CHEST) {
+      await startChestProcessor(botData)
+    }
+    if (data.command === CommandEnum.EXPAND) {
+      const center = new Vec3(-7799, 81, 7800)
+      await expandIslandNew(botData, 'dirt')
+    }
+    if (data.command === CommandEnum.STORE_TO_CHEST) {
+      const config = data.config as ConfigStoreChest
+      await storeToChest(botData, config)
+    }
+    if (data.command === CommandEnum.FARM_CHEST) {
+      botData.profile.isWorking = true
+      while (botData.profile.isWorking) {
+        botData.bot.chat('/sell all')
+        await botData.bot.waitForTicks(2)
+        await startChestProcessor(botData, false)
+        await botData.bot.waitForTicks(20)
+        await startFarmingNew(botData, false)
+        await botData.bot.waitForTicks(20)
+      }
+    }
+    // if (data.command === 'test') {
+    //   botData.bot.loadPlugin(pathfinder)
+    //   const packetName = [
+    //     'entity_move_look',
+    //     'map_chunk',
+    //     'entity_head_rotation',
+    //     'player_info',
+    //     'window_items',
+    //     'teams',
+    //     'scoreboard_score',
+    //     'held_item_slot',
+    //     'window_click',
+    //     'position',
+    //     'block_break_animation',
+    //     'animation',
+    //     'sound_effect',
+    //     'rel_entity_move',
+    //     'bundle_delimiter',
+    //     'spawn_entity',
+    //     'entity_metadata',
+    //     'world_event',
+    //     'multi_block_change',
+    //     'sync_entity_position',
+    //     'entity_equipment',
+    //     'entity_look',
+    //     'keep_alive'
+    //   ]
+    //   mineflayerViewer.mineflayer(botData.bot, { firstPerson: true, port: 3005 })
+    //   const callback = (data: any, meta: any) => {
+    //     if (packetName.includes(meta.name)) return
+    //     console.log(`[PACKET OUT] ${meta.name}:`, JSON.stringify(data, null, 2))
+    //   }
+    //   const orig = botData.bot._client.write.bind(botData.bot._client)
+    //   botData.bot._client.write = (name: string, data: any) => {
+    //     if (packetName.includes(name)) return orig(name, data)
+    //     // if (name !== 'block_place') return orig(name, data)
+    //     console.log(`[PACKET OUT] ${name}:`, JSON.stringify(data, null, 2))
+    //     return orig(name, data)
+    //   }
+    //   botData.bot._client.on('packet', (data: any, meta: any) => {
+    //     if (['block_change', 'acknowledge_player_digging', 'block_action'].includes(meta.name)) {
+    //       console.log(`[PACKET IN] ${meta.name}:`, JSON.stringify(data, null, 2))
+    //     }
+    //   })
+    //   console.log('Activated')
+    // }
+  }
+
+  async checkInventory(data: { name: string }) {
+    const botData = this.bots[data.name]
+    if (!botData) return `Bot with name ${data.name} not found`
+
+    const bot = botData.bot
+
+    bot.inventory.slots.forEach((slot, idx) => {
+      console.log(`Slot[${idx}]: ${slot?.name}:${slot?.count}`)
+    })
+  }
+
+  async startFarm(data: { name: string }) {
+    const botData = this.bots[data.name]
+    if (!botData) return `Bot with name ${data.name} not found`
+
+    // await startFarming(botData)
+  }
+
+  private async start() {
+    // await this.createBot(this.players[0])
+    // await this.sleep(60000)
+    // await this.createBot(this.players[1])
   }
 
   // ===== BOT =====
-  private createBot(profile: FakePlayerProfile) {
-    const bot = mineflayer.createBot({
+  private async createBot(profile: Profile) {
+    console.log(profile.name)
+    const baseOpt: mineflayer.BotOptions = {
       host: this.HOST,
-      port: this.PORT,
-      username: profile.name
-    })
+      username: profile.name,
+      auth: 'offline',
+      version: '1.21.6'
+    }
+
+    const bot = mineflayer.createBot(baseOpt)
 
     this.bots[profile.name] = { bot, profile }
 
-    bot.on('login', () => {
+    if (profile.listenChat) {
+      bot.on('chat', (username, message) => {
+        console.log(`[Chat ${profile.name}] - ${username}: ${message}`)
+      })
+    }
+
+    bot.once('login', async () => {
       console.log(`[BOT] ${profile.name} joined`)
+      // stop semua movement
+      bot.clearControlStates()
+
+      // tunggu physics settle
+      await bot.waitForTicks(20) // ±1 detik
+
+      console.log('✅ Physics stabilized')
+    })
+
+    bot.on('spawn', async () => {
+      console.log(`[BOT] ${profile.name} spawned`)
+
+      if (!profile.isWorking) {
+        const password = this.bots[profile.name].profile.password
+        console.log(`[BOT] ${profile.name} Typing register with password: ${password}`)
+        bot.chat(`/register ${password}`)
+        await sleep(3000)
+        console.log(`[BOT] ${profile.name} Typing login with password: ${password}`)
+        bot.chat(`/login ${password}`)
+        console.log(`[BOT] ${profile.name} logged in`)
+
+        await sleep(3000)
+        console.log(`[BOT] ${profile.name} Typing /server oneblock`)
+        bot.chat('/server oneblock')
+
+        await sleep(2000)
+        console.log(`[BOT] ${profile.name} Typing /is`)
+        bot.chat('/is')
+      }
+    })
+
+    bot.on('kicked', (reason: string, loggedIn: boolean) => {
+      console.log(`[BOT] ${profile.name} kicked | ${loggedIn} | ${reason}`)
+      console.log(JSON.stringify(reason))
+      if (this.bots[profile.name]) {
+        delete this.bots[profile.name]
+      }
     })
   }
 
-  private logoutBot(name: string) {
-    const bot = this.bots[name]
-    if (!bot) return
-
-    console.log(`[BOT] ${name} logout`)
-    bot.bot.quit()
-    delete this.bots[name]
+  private miningChest() {
+    return [
+      {
+        x: -7797.5,
+        y: 89.5,
+        z: 7799.5
+      },
+      {
+        x: -7797.5,
+        y: 89.5,
+        z: 7798.5
+      },
+      {
+        x: -7797.5,
+        y: 89.5,
+        z: 7797.5
+      },
+      {
+        x: -7797.5,
+        y: 89.5,
+        z: 7796.5
+      },
+      {
+        x: -7797.5,
+        y: 89.5,
+        z: 7795.5
+      }
+    ]
   }
 
-  private loginBot(name: string) {
-    if (this.bots[name]) return
-
-    const profile = this.players.find(p => p.name === name)
-    if (!profile) return
-
-    console.log(`[BOT] ${name} login`)
-    this.createBot(profile)
-  }
-
-  // ===== CORE: SEQUENTIAL TIMELINE =====
-  private async runAllTeamsSequential() {
-    this.teams.forEach(team => {
-      this.runTeamTimeline(team)
-    })
-  }
-
-  private async runTeamTimeline(team: Team) {
-    // sort by time
-    const timeline = [...team.timeline].sort(
-      (a, b) => this.parseTime(a.time) - this.parseTime(b.time)
-    )
-
-    for (let i = 0; i < timeline.length; i++) {
-      const event = timeline[i]
-
-      const delay = this.getDelayFromNow(event.time)
-
-      // ⏳ tunggu sampai waktunya
-      await this.sleep(delay)
-
-      // 🚫 pastikan tidak overlap (event selesai dulu)
-      await this.executeEvent(event)
-    }
-  }
-
-  // ===== EVENT EXECUTION =====
-  private async executeEvent(event: TimelineEvent) {
-    if (event.type === 'conversation') {
-      await this.runConversation(event)
-    }
-
-    if (event.type === 'logout') {
-      this.logoutBot(event.data?.actor!)
-    }
-
-    if (event.type === 'login') {
-      this.loginBot(event.data?.actor!)
-    }
-  }
-
-  // ===== MULTI TURN (WAIT UNTIL DONE) =====
-  private async runConversation(event: TimelineEvent) {
-    const { initiator, responder, messages } = event.data!
-
-    const botA = this.bots[initiator!]
-    const botB = this.bots[responder!]
-
-    if (!botA || !botB) return
-
-    for (let i = 0; i < messages!.length; i++) {
-      const isEven = i % 2 === 0
-      const sender = isEven ? botA : botB
-      const target = isEven ? botB : botA
-
-      const msg = this.format(messages![i], target.profile.name)
-
-      await this.sleep(this.humanDelay())
-
-      sender.bot.chat(msg)
-    }
-  }
-
-  // ===== UTIL =====
-  private parseTime(time: string) {
-    const [h, m, s] = time.split(':').map(Number)
-    return h * 3600 + m * 60 + s
-  }
-
-  private getDelayFromNow(time: string) {
-    const [h, m, s] = time.split(':').map(Number)
-
-    const now = new Date()
-    const target = new Date()
-
-    target.setHours(h, m, s, 0)
-
-    if (target < now) {
-      target.setDate(target.getDate() + 1)
-    }
-
-    return target.getTime() - now.getTime()
-  }
-
-  private sleep(ms: number) {
-    return new Promise(resolve => setTimeout(resolve, ms))
-  }
-
-  private format(text: string, target: string) {
-    return text.replace('{target}', target)
-  }
-
-  private humanDelay() {
-    return Math.floor(Math.random() * 4000) + 2000
+  private storageUnitLocation() {
+    return [
+      {
+        type: 'raw_iron',
+        pos: {
+          x: -7794.5,
+          y: 89.5,
+          z: 7799.5
+        }
+      },
+      {
+        type: 'raw_copper',
+        pos: {
+          x: -7794.5,
+          y: 89.5,
+          z: 7798.5
+        }
+      },
+      {
+        type: 'coal',
+        pos: {
+          x: -7794.5,
+          y: 89.5,
+          z: 7797.5
+        }
+      },
+      {
+        type: 'cobblestone',
+        pos: {
+          x: -7794.5,
+          y: 90.5,
+          z: 7799.5
+        }
+      },
+      {
+        type: 'diamond',
+        pos: {
+          x: -7794.5,
+          y: 90.5,
+          z: 7798.5
+        }
+      }
+    ]
   }
 }
