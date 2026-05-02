@@ -14,6 +14,7 @@ import { expandIslandNew } from './work/expand-island'
 import { ConfigFarming, startFarming } from './work/farm'
 import { ConfigMining, startMining } from './work/mining'
 import { ConfigStoreChest, storeToChest } from './skills/store-to-chest'
+import { ConfigService } from '@nestjs/config'
 
 export enum CommandEnum {
   FARM = 'farm',
@@ -76,10 +77,12 @@ export type ChestRequest = {
 }
 
 @Injectable()
-export class BotService implements OnModuleInit {
+export class BotService {
+  private readonly HOST: string
+  constructor(private readonly configService: ConfigService) {
+    this.HOST = this.configService.get<string>('SERVER_URL') || 'localhost:25565'
+  }
   private bots: Record<string, BotWrapper> = {}
-
-  private readonly HOST = 'alwination.id'
 
   private players: Profile[] = [
     {
@@ -95,10 +98,6 @@ export class BotService implements OnModuleInit {
       listenChat: false
     }
   ]
-
-  onModuleInit() {
-    this.start()
-  }
 
   async login(data: { name: string }) {
     const player = this.players.find(p => p.name === data.name)
